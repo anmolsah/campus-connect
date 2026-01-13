@@ -665,6 +665,116 @@ CREATE TABLE public.messages (
 );
 
 -- =============================================
+-- POSTS TABLE (SOCIAL FEED)
+-- =============================================
+CREATE TABLE public.posts (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  author_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  post_type TEXT NOT NULL CHECK (post_type IN ('thought', 'photo', 'project', 'event', 'resource', 'question')),
+  mode_context TEXT NOT NULL CHECK (mode_context IN ('study', 'social', 'project')),
+
+  -- Common fields
+  content TEXT, -- Main text content (max 500 chars)
+  image_url TEXT, -- Optional image
+
+  -- Project-specific fields
+  project_title TEXT,
+  project_links TEXT[], -- Array of URLs
+  roles_needed TEXT[], -- Array of roles
+
+  -- Event-specific fields
+  event_title TEXT,
+  event_date TIMESTAMPTZ,
+  event_location TEXT,
+  event_rsvp_link TEXT,
+
+  -- Resource-specific fields
+  resource_title TEXT,
+  resource_link TEXT,
+  resource_tags TEXT[], -- Subject tags
+
+  -- Question-specific fields
+  best_answer_id UUID, -- References post_comments.id
+
+  -- Moderation
+  moderation_status TEXT DEFAULT 'approved' CHECK (moderation_status IN ('pending', 'approved', 'rejected', 'flagged')),
+  moderation_reason TEXT,
+
+  -- Counters (denormalized for performance)
+  likes_count INTEGER DEFAULT 0,
+  comments_count INTEGER DEFAULT 0,
+
+  -- Timestamps
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- POST COMMENTS TABLE
+-- =============================================
+CREATE TABLE public.post_comments (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE NOT NULL,
+  author_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  parent_comment_id UUID REFERENCES public.post_comments(id) ON DELETE CASCADE, -- For threaded replies
+  content TEXT NOT NULL,
+  is_best_answer BOOLEAN DEFAULT FALSE, -- For question posts
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- POST LIKES TABLE
+-- =============================================
+CREATE TABLE public.post_likes (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(post_id, user_id) -- One like per user per post
+);
+
+-- =============================================
+-- SAVED POSTS TABLE
+-- =============================================
+CREATE TABLE public.saved_posts (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(post_id, user_id) -- One save per user per post
+);
+
+-- =============================================
+-- CONTENT REPORTS TABLE
+-- =============================================
+CREATE TABLE public.content_reports (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  reporter_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE,
+  comment_id UUID REFERENCES public.post_comments(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL CHECK (reason IN ('spam', 'inappropriate', 'harassment', 'violence', 'misinformation', 'other')),
+  description TEXT,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'reviewed', 'dismissed', 'action_taken')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ,
+  CONSTRAINT report_target CHECK (post_id IS NOT NULL OR comment_id IS NOT NULL)
+);
+
+-- =============================================
+-- USER VIOLATIONS TABLE (Moderation History)
+-- =============================================
+CREATE TABLE public.user_violations (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  violation_type TEXT NOT NULL CHECK (violation_type IN ('content_policy', 'harassment', 'spam', 'inappropriate_content')),
+  description TEXT,
+  action_taken TEXT NOT NULL CHECK (action_taken IN ('warning', 'post_removed', 'suspension_24h', 'suspension_7d', 'permanent_ban')),
+  related_post_id UUID REFERENCES public.posts(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
 -- INDEXES FOR PERFORMANCE
 -- =============================================
 CREATE INDEX idx_profiles_mode ON public.profiles(current_mode);
@@ -675,6 +785,28 @@ CREATE INDEX idx_connections_receiver ON public.connections(receiver_id);
 CREATE INDEX idx_connections_status ON public.connections(status);
 CREATE INDEX idx_messages_connection ON public.messages(connection_id);
 CREATE INDEX idx_messages_created ON public.messages(created_at DESC);
+
+-- Posts indexes
+CREATE INDEX idx_posts_author ON public.posts(author_id);
+CREATE INDEX idx_posts_type ON public.posts(post_type);
+CREATE INDEX idx_posts_mode ON public.posts(mode_context);
+CREATE INDEX idx_posts_moderation ON public.posts(moderation_status);
+CREATE INDEX idx_posts_created ON public.posts(created_at DESC);
+CREATE INDEX idx_posts_likes ON public.posts(likes_count DESC);
+
+-- Comments indexes
+CREATE INDEX idx_comments_post ON public.post_comments(post_id);
+CREATE INDEX idx_comments_author ON public.post_comments(author_id);
+CREATE INDEX idx_comments_created ON public.post_comments(created_at DESC);
+
+-- Likes and saves indexes
+CREATE INDEX idx_likes_post ON public.post_likes(post_id);
+CREATE INDEX idx_likes_user ON public.post_likes(user_id);
+CREATE INDEX idx_saved_user ON public.saved_posts(user_id);
+
+-- Reports index
+CREATE INDEX idx_reports_status ON public.content_reports(status);
+CREATE INDEX idx_violations_user ON public.user_violations(user_id);
 
 -- =============================================
 -- UPDATED_AT TRIGGER
@@ -694,6 +826,54 @@ CREATE TRIGGER update_profiles_updated_at
 CREATE TRIGGER update_connections_updated_at
   BEFORE UPDATE ON public.connections
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_posts_updated_at
+  BEFORE UPDATE ON public.posts
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_comments_updated_at
+  BEFORE UPDATE ON public.post_comments
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- =============================================
+-- LIKES COUNTER TRIGGERS
+-- =============================================
+CREATE OR REPLACE FUNCTION update_post_likes_count()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.posts SET likes_count = likes_count + 1 WHERE id = NEW.post_id;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.posts SET likes_count = likes_count - 1 WHERE id = OLD.post_id;
+    RETURN OLD;
+  END IF;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER trigger_update_likes_count
+  AFTER INSERT OR DELETE ON public.post_likes
+  FOR EACH ROW EXECUTE FUNCTION update_post_likes_count();
+
+-- =============================================
+-- COMMENTS COUNTER TRIGGERS
+-- =============================================
+CREATE OR REPLACE FUNCTION update_post_comments_count()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    UPDATE public.posts SET comments_count = comments_count + 1 WHERE id = NEW.post_id;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE public.posts SET comments_count = comments_count - 1 WHERE id = OLD.post_id;
+    RETURN OLD;
+  END IF;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER trigger_update_comments_count
+  AFTER INSERT OR DELETE ON public.post_comments
+  FOR EACH ROW EXECUTE FUNCTION update_post_comments_count();
 ```
 
 ### Row Level Security Policies
@@ -792,6 +972,155 @@ CREATE POLICY "Users can send messages in accepted connections"
       AND (connections.requester_id = auth.uid() OR connections.receiver_id = auth.uid())
     )
   );
+
+-- =============================================
+-- POSTS POLICIES
+-- =============================================
+ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
+
+-- Anyone authenticated can view approved posts
+CREATE POLICY "Approved posts are viewable by authenticated users"
+  ON public.posts FOR SELECT
+  USING (auth.role() = 'authenticated' AND moderation_status = 'approved');
+
+-- Users can create posts
+CREATE POLICY "Verified users can create posts"
+  ON public.posts FOR INSERT
+  WITH CHECK (
+    auth.uid() = author_id
+    AND EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid()
+      AND profiles.is_verified = true
+    )
+  );
+
+-- Users can update their own posts
+CREATE POLICY "Users can update own posts"
+  ON public.posts FOR UPDATE
+  USING (auth.uid() = author_id);
+
+-- Users can delete their own posts
+CREATE POLICY "Users can delete own posts"
+  ON public.posts FOR DELETE
+  USING (auth.uid() = author_id);
+
+-- =============================================
+-- POST COMMENTS POLICIES
+-- =============================================
+ALTER TABLE public.post_comments ENABLE ROW LEVEL SECURITY;
+
+-- Anyone authenticated can view comments on approved posts
+CREATE POLICY "Comments viewable on approved posts"
+  ON public.post_comments FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.posts
+      WHERE posts.id = post_comments.post_id
+      AND posts.moderation_status = 'approved'
+    )
+  );
+
+-- Verified users can create comments
+CREATE POLICY "Verified users can create comments"
+  ON public.post_comments FOR INSERT
+  WITH CHECK (
+    auth.uid() = author_id
+    AND EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid()
+      AND profiles.is_verified = true
+    )
+  );
+
+-- Users can update their own comments
+CREATE POLICY "Users can update own comments"
+  ON public.post_comments FOR UPDATE
+  USING (auth.uid() = author_id);
+
+-- Users can delete their own comments
+CREATE POLICY "Users can delete own comments"
+  ON public.post_comments FOR DELETE
+  USING (auth.uid() = author_id);
+
+-- =============================================
+-- POST LIKES POLICIES
+-- =============================================
+ALTER TABLE public.post_likes ENABLE ROW LEVEL SECURITY;
+
+-- Anyone authenticated can view likes
+CREATE POLICY "Likes are viewable"
+  ON public.post_likes FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- Verified users can like posts
+CREATE POLICY "Verified users can like posts"
+  ON public.post_likes FOR INSERT
+  WITH CHECK (
+    auth.uid() = user_id
+    AND EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid()
+      AND profiles.is_verified = true
+    )
+  );
+
+-- Users can unlike (delete their own likes)
+CREATE POLICY "Users can remove own likes"
+  ON public.post_likes FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- =============================================
+-- SAVED POSTS POLICIES
+-- =============================================
+ALTER TABLE public.saved_posts ENABLE ROW LEVEL SECURITY;
+
+-- Users can view their own saved posts
+CREATE POLICY "Users can view own saved posts"
+  ON public.saved_posts FOR SELECT
+  USING (auth.uid() = user_id);
+
+-- Users can save posts
+CREATE POLICY "Users can save posts"
+  ON public.saved_posts FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+-- Users can unsave posts
+CREATE POLICY "Users can unsave posts"
+  ON public.saved_posts FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- =============================================
+-- CONTENT REPORTS POLICIES
+-- =============================================
+ALTER TABLE public.content_reports ENABLE ROW LEVEL SECURITY;
+
+-- Users can view their own reports
+CREATE POLICY "Users can view own reports"
+  ON public.content_reports FOR SELECT
+  USING (auth.uid() = reporter_id);
+
+-- Verified users can create reports
+CREATE POLICY "Verified users can create reports"
+  ON public.content_reports FOR INSERT
+  WITH CHECK (
+    auth.uid() = reporter_id
+    AND EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid()
+      AND profiles.is_verified = true
+    )
+  );
+
+-- =============================================
+-- USER VIOLATIONS POLICIES
+-- =============================================
+ALTER TABLE public.user_violations ENABLE ROW LEVEL SECURITY;
+
+-- Users can view their own violations
+CREATE POLICY "Users can view own violations"
+  ON public.user_violations FOR SELECT
+  USING (auth.uid() = user_id);
 ```
 
 ### Storage Buckets Setup
@@ -800,6 +1129,7 @@ CREATE POLICY "Users can send messages in accepted connections"
 -- Create storage buckets
 INSERT INTO storage.buckets (id, name, public) VALUES ('id-cards', 'id-cards', false);
 INSERT INTO storage.buckets (id, name, public) VALUES ('avatars', 'avatars', true);
+INSERT INTO storage.buckets (id, name, public) VALUES ('post-images', 'post-images', true);
 
 -- ID Cards policy (private - only owner can access)
 CREATE POLICY "Users can upload own ID card"
@@ -834,6 +1164,140 @@ CREATE POLICY "Users can update own avatar"
     bucket_id = 'avatars'
     AND auth.uid()::text = (storage.foldername(name))[1]
   );
+
+-- Post images policy (public readable, authenticated upload)
+-- Images go through moderation before being visible
+CREATE POLICY "Post images are publicly accessible"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'post-images');
+
+CREATE POLICY "Verified users can upload post images"
+  ON storage.objects FOR INSERT
+  WITH CHECK (
+    bucket_id = 'post-images'
+    AND auth.uid()::text = (storage.foldername(name))[1]
+    AND EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid()
+      AND profiles.is_verified = true
+    )
+  );
+
+CREATE POLICY "Users can delete own post images"
+  ON storage.objects FOR DELETE
+  USING (
+    bucket_id = 'post-images'
+    AND auth.uid()::text = (storage.foldername(name))[1]
+  );
+```
+
+### Content Moderation Service (MVP Implementation)
+
+For MVP, we'll use a simple NSFW detection API. Here's the integration approach:
+
+```typescript
+// services/contentModeration.ts
+import { supabase } from "@/lib/supabase";
+
+const NSFW_API_ENDPOINT = "https://api.moderatecontent.com/moderate/";
+const NSFW_API_KEY = import.meta.env.VITE_MODERATION_API_KEY;
+
+interface ModerationResult {
+  isApproved: boolean;
+  confidence: number;
+  reason?: string;
+}
+
+export const moderateImage = async (
+  imageUrl: string
+): Promise<ModerationResult> => {
+  try {
+    const response = await fetch(
+      `${NSFW_API_ENDPOINT}?key=${NSFW_API_KEY}&url=${encodeURIComponent(
+        imageUrl
+      )}`
+    );
+    const result = await response.json();
+
+    // Rating: 1 = Safe, 2 = Suggestive, 3 = Adult
+    const isApproved = result.rating_index === 1;
+
+    return {
+      isApproved,
+      confidence: result.predictions?.adult || 0,
+      reason: isApproved ? undefined : "Content flagged as inappropriate",
+    };
+  } catch (error) {
+    console.error("Moderation API error:", error);
+    // Default to manual review on API failure
+    return {
+      isApproved: false,
+      confidence: 0,
+      reason: "Pending manual review",
+    };
+  }
+};
+
+// Create post with moderation
+export const createPostWithModeration = async (
+  postData: Partial<Post>,
+  imageFile?: File
+): Promise<{ success: boolean; post?: Post; error?: string }> => {
+  let imageUrl: string | undefined;
+  let moderationStatus: "approved" | "pending" | "rejected" = "approved";
+
+  // Upload and moderate image if provided
+  if (imageFile) {
+    const userId = (await supabase.auth.getUser()).data.user?.id;
+    const filePath = `${userId}/${Date.now()}-${imageFile.name}`;
+
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from("post-images")
+      .upload(filePath, imageFile);
+
+    if (uploadError) {
+      return { success: false, error: "Failed to upload image" };
+    }
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("post-images").getPublicUrl(filePath);
+
+    imageUrl = publicUrl;
+
+    // Moderate the image
+    const moderation = await moderateImage(publicUrl);
+
+    if (!moderation.isApproved) {
+      // Delete the image if rejected
+      if (moderation.reason?.includes("inappropriate")) {
+        await supabase.storage.from("post-images").remove([filePath]);
+        return {
+          success: false,
+          error: "Image contains inappropriate content",
+        };
+      }
+      moderationStatus = "pending";
+    }
+  }
+
+  // Create the post
+  const { data: post, error } = await supabase
+    .from("posts")
+    .insert({
+      ...postData,
+      image_url: imageUrl,
+      moderation_status: moderationStatus,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  return { success: true, post };
+};
 ```
 
 ---
@@ -875,6 +1339,43 @@ CREATE POLICY "Users can update own avatar"
 | GET    | `/messages/:connectionId` | Get chat history |
 | POST   | `/messages/:connectionId` | Send message     |
 | PATCH  | `/messages/:id/read`      | Mark as read     |
+
+### Posts (Social Feed)
+
+| Method | Endpoint              | Description                  |
+| ------ | --------------------- | ---------------------------- |
+| GET    | `/posts`              | Get feed posts (paginated)   |
+| GET    | `/posts/:id`          | Get single post with details |
+| POST   | `/posts`              | Create new post              |
+| PATCH  | `/posts/:id`          | Update own post              |
+| DELETE | `/posts/:id`          | Delete own post              |
+| GET    | `/posts/user/:userId` | Get posts by user            |
+| GET    | `/posts/saved`        | Get saved posts              |
+
+### Comments
+
+| Method | Endpoint              | Description         |
+| ------ | --------------------- | ------------------- |
+| GET    | `/posts/:id/comments` | Get post comments   |
+| POST   | `/posts/:id/comments` | Add comment to post |
+| PATCH  | `/comments/:id`       | Update own comment  |
+| DELETE | `/comments/:id`       | Delete own comment  |
+
+### Likes & Saves
+
+| Method | Endpoint          | Description   |
+| ------ | ----------------- | ------------- |
+| POST   | `/posts/:id/like` | Like a post   |
+| DELETE | `/posts/:id/like` | Unlike a post |
+| POST   | `/posts/:id/save` | Save a post   |
+| DELETE | `/posts/:id/save` | Unsave a post |
+
+### Reports
+
+| Method | Endpoint               | Description      |
+| ------ | ---------------------- | ---------------- |
+| POST   | `/reports/post/:id`    | Report a post    |
+| POST   | `/reports/comment/:id` | Report a comment |
 
 > **Note**: All endpoints are accessed through Supabase client library, not traditional REST calls. The table above represents the conceptual API structure.
 
@@ -1053,6 +1554,92 @@ Received (Left aligned):
 └──────────────────────────────────────────────────┘
 ```
 
+#### Campus Feed
+
+```
+┌──────────────────────────────────────────────────┐
+│  ← Back         FEED          ➕ New Post        │
+├──────────────────────────────────────────────────┤
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  Filter: [All] [Study] [Social] [Project]  │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  [👤]  Sarah Johnson • 2h      📖 Study    │ │
+│  │  ─────────────────────────────────────────  │ │
+│  │  💭 "Looking for study partners for the    │ │
+│  │      CS 301 finals! Anyone interested? 📚" │ │
+│  │                                            │ │
+│  │  ❤️ 12  💬 5  🔖 Save  ⋮                   │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  [👤]  Alex Chen • 5h          🤝 Social   │ │
+│  │  ─────────────────────────────────────────  │ │
+│  │  📸 ┌──────────────────────────────────┐   │ │
+│  │     │                                  │   │ │
+│  │     │     [Campus Sunset Photo]        │   │ │
+│  │     │                                  │   │ │
+│  │     └──────────────────────────────────┘   │ │
+│  │  "Beautiful evening at the quad! 🌅"       │ │
+│  │                                            │ │
+│  │  ❤️ 45  💬 12  🔖 Save  ⋮                  │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  [👤]  Jordan Lee • 1d        🚀 Project   │ │
+│  │  ─────────────────────────────────────────  │ │
+│  │  🚀 PROJECT POST                           │ │
+│  │  ┌──────────────────────────────────────┐  │ │
+│  │  │ EcoTrack - Campus Sustainability     │  │ │
+│  │  │ Looking for: UI/UX Designer          │  │ │
+│  │  │ [View Details →]                     │  │ │
+│  │  └──────────────────────────────────────┘  │ │
+│  │                                            │ │
+│  │  ❤️ 28  💬 8  🔖 Save  ⋮                   │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+├──────────────────────────────────────────────────┤
+│  🏠 Home    📰 Feed    💬 Chats    👤 Profile   │
+└──────────────────────────────────────────────────┘
+```
+
+#### Create Post Modal
+
+```
+┌──────────────────────────────────────────────────┐
+│  ✕ Cancel     CREATE POST          Post →       │
+├──────────────────────────────────────────────────┤
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  Post Type:                                │ │
+│  │  ┌──────┬──────┬──────┬──────┬──────┬────┐ │ │
+│  │  │💭    │📸    │🚀    │📅    │📚    │❓  │ │ │
+│  │  │══════│      │      │      │      │    │ │ │
+│  │  └──────┴──────┴──────┴──────┴──────┴────┘ │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  Mode:  ○ 📖 Study  ● 🤝 Social  ○ 🚀 Project   │
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │                                            │ │
+│  │  What's on your mind?                      │ │
+│  │                                            │ │
+│  │                                            │ │
+│  │                                            │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  ┌────────────────────────────────────────────┐ │
+│  │  📷 Add Photo    😊 Emoji    # Tags        │ │
+│  └────────────────────────────────────────────┘ │
+│                                                  │
+│  ⚠️ Photos are scanned for inappropriate        │
+│     content before posting                      │
+│                                                  │
+└──────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 🔒 Security Measures
@@ -1092,8 +1679,20 @@ const nameSchema = z.string().min(2).max(50);
 
 ### Content Moderation (MVP)
 
-- **Phase 1**: Manual review if reported
-- **Future**: AI-based text moderation
+| Measure            | Implementation                       |
+| ------------------ | ------------------------------------ |
+| Image Scanning     | AI-powered NSFW detection API        |
+| Text Content       | Community reporting (MVP)            |
+| Blocked Content    | Nudity, violence, explicit material  |
+| Review Queue       | Edge cases flagged for manual review |
+| Violation Tracking | `user_violations` table              |
+
+**Violation Escalation:**
+
+1. 1st offense → Warning + post removed
+2. 2nd offense → 24-hour account suspension
+3. 3rd offense → 7-day suspension
+4. 4th offense → Permanent ban
 
 ---
 
@@ -1135,6 +1734,23 @@ const nameSchema = z.string().min(2).max(50);
 - [ ] Emoji picker works
 - [ ] Timestamps display correctly
 
+#### Social Feed Flow
+
+- [ ] Create thought post successfully
+- [ ] Upload photo with caption
+- [ ] Photo moderation blocks inappropriate content
+- [ ] Appropriate photos published immediately
+- [ ] Create project post with roles
+- [ ] Create event post with date/location
+- [ ] Like/unlike posts
+- [ ] Comment on posts
+- [ ] Save/unsave posts
+- [ ] Report inappropriate content
+- [ ] Filter feed by mode
+- [ ] Filter feed by post type
+- [ ] Pagination loads more posts
+- [ ] Real-time updates for new posts
+
 ### Load Testing (Pre-Launch)
 
 ```bash
@@ -1155,9 +1771,11 @@ k6 run --vus 50 --duration 30s load-test.js
 - [ ] Brevo SMTP verified
 - [ ] Domain verified (.edu whitelist)
 - [ ] RLS policies tested
-- [ ] Storage buckets configured
+- [ ] Storage buckets configured (avatars, id-cards, post-images)
+- [ ] Content moderation API integrated
 - [ ] Error monitoring (Sentry) setup
 - [ ] Analytics (Mixpanel/Posthog) integrated
+- [ ] Social feed performance tested
 
 ### Launch Day (T-0)
 
@@ -1199,6 +1817,17 @@ k6 run --vus 50 --duration 30s load-test.js
 | Peak Usage Hours         | Server planning     |
 | Drop-off Points          | UX improvement      |
 
+### Feed Engagement Metrics
+
+| Metric             | Target | Purpose              |
+| ------------------ | ------ | -------------------- |
+| Posts Created/Day  | 10+    | Content generation   |
+| Avg. Likes/Post    | 5+     | Engagement level     |
+| Avg. Comments/Post | 2+     | Discussion quality   |
+| Photo Posts %      | 30%+   | Visual content share |
+| Content Reports    | <5%    | Community health     |
+| Moderation Blocks  | <2%    | Content quality      |
+
 ### Feedback Collection
 
 - In-app feedback button
@@ -1224,9 +1853,11 @@ k6 run --vus 50 --duration 30s load-test.js
 ### Technical Debt Accepted
 
 1. **Hardcoded college list** - Will need dynamic college database
-2. **No pagination** - Okay for 50 users, needs fixing for scale
+2. **No pagination for feed** - Okay for 50 users, needs infinite scroll for scale
 3. **Basic error handling** - Improve UX for edge cases
 4. **No offline support** - Requires PWA implementation
+5. **Simple content moderation** - AI image only, text moderation in Phase 2
+6. **No post editing history** - Future audit trail
 
 ---
 
