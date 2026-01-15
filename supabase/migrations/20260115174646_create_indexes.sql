@@ -1,0 +1,23 @@
+-- Indexes for Performance
+CREATE INDEX IF NOT EXISTS idx_profiles_mode ON public.profiles(current_mode);
+CREATE INDEX IF NOT EXISTS idx_profiles_college ON public.profiles(college_name);
+CREATE INDEX IF NOT EXISTS idx_profiles_last_active ON public.profiles(last_active DESC);
+CREATE INDEX IF NOT EXISTS idx_connections_requester ON public.connections(requester_id);
+CREATE INDEX IF NOT EXISTS idx_connections_receiver ON public.connections(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_connections_status ON public.connections(status);
+CREATE INDEX IF NOT EXISTS idx_messages_connection ON public.messages(connection_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created ON public.messages(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_author ON public.posts(author_id);
+CREATE INDEX IF NOT EXISTS idx_posts_type ON public.posts(post_type);
+CREATE INDEX IF NOT EXISTS idx_posts_mode ON public.posts(mode_context);
+CREATE INDEX IF NOT EXISTS idx_posts_moderation ON public.posts(moderation_status);
+CREATE INDEX IF NOT EXISTS idx_posts_created ON public.posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_likes ON public.posts(likes_count DESC);
+CREATE INDEX IF NOT EXISTS idx_comments_post ON public.post_comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_comments_author ON public.post_comments(author_id);
+CREATE INDEX IF NOT EXISTS idx_comments_created ON public.post_comments(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_likes_post ON public.post_likes(post_id);
+CREATE INDEX IF NOT EXISTS idx_likes_user ON public.post_likes(user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_user ON public.saved_posts(user_id);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON public.content_reports(status);
+CREATE INDEX IF NOT EXISTS idx_violations_user ON public.user_violations(user_id);;
