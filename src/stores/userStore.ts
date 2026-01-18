@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Profile } from '../types/database.types'
+import type { Profile } from '../types/database.types'
 
 type Mode = 'study' | 'social' | 'project'
 

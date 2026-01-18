@@ -1,41 +1,23 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useEffect } from 'react'
-import { supabase } from './lib/supabase'
-import { useUserStore } from './stores/userStore'
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { supabase } from "./lib/supabase";
+import { useUserStore } from "./stores/userStore";
 
 // Pages
-import Landing from './pages/Landing'
-import Auth from './pages/Auth'
-import Onboarding from './pages/Onboarding'
-import Home from './pages/Home'
-import Discovery from './pages/Discovery'
-import Feed from './pages/Feed'
-import Connections from './pages/Connections'
-import Chat from './pages/Chat'
-import Profile from './pages/Profile'
+import LandingPage from "./pages/LandingPage";
+import OnboardingPage from "./pages/OnboardingPage";
+import DiscoveryPage from "./pages/DiscoveryPage";
+import FeedPage from "./pages/FeedPage";
+import ConnectionsPage from "./pages/ConnectionsPage";
+import ChatsPage from "./pages/ChatsPage";
+import ProfilePage from "./pages/ProfilePage";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      refetchOnWindowFocus: false,
-    },
-  },
-})
-
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const user = useUserStore((state) => state.user)
-  
-  if (!user) {
-    return <Navigate to="/auth" replace />
-  }
-  
-  return <>{children}</>
-}
+const queryClient = new QueryClient();
 
 function App() {
-  const setUser = useUserStore((state) => state.setUser)
+  const { user, setUser } = useUserStore();
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Check active session
@@ -43,17 +25,16 @@ function App() {
       if (session?.user) {
         // Fetch user profile
         supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
           .single()
           .then(({ data }) => {
-            if (data) {
-              setUser(data as any)
-            }
-          })
+            if (data) setUser(data);
+          });
       }
-    })
+      setLoading(false);
+    });
 
     // Listen for auth changes
     const {
@@ -61,83 +42,65 @@ function App() {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
           .single()
           .then(({ data }) => {
-            if (data) {
-              setUser(data as any)
-            }
-          })
+            if (data) setUser(data);
+          });
       } else {
-        setUser(null)
+        setUser(null);
       }
-    })
+    });
 
-    return () => subscription.unsubscribe()
-  }, [setUser])
+    return () => subscription.unsubscribe();
+  }, [setUser]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-50 to-primary-100">
+        <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary-500 border-t-transparent"></div>
+      </div>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/onboarding" element={<Onboarding />} />
-          
           <Route
-            path="/home"
-            element={
-              <ProtectedRoute>
-                <Home />
-              </ProtectedRoute>
-            }
+            path="/"
+            element={user ? <Navigate to="/discover" /> : <LandingPage />}
           />
           <Route
-            path="/discovery"
-            element={
-              <ProtectedRoute>
-                <Discovery />
-              </ProtectedRoute>
-            }
+            path="/onboarding"
+            element={user ? <OnboardingPage /> : <Navigate to="/" />}
+          />
+          <Route
+            path="/discover"
+            element={user ? <DiscoveryPage /> : <Navigate to="/" />}
           />
           <Route
             path="/feed"
-            element={
-              <ProtectedRoute>
-                <Feed />
-              </ProtectedRoute>
-            }
+            element={user ? <FeedPage /> : <Navigate to="/" />}
           />
           <Route
             path="/connections"
-            element={
-              <ProtectedRoute>
-                <Connections />
-              </ProtectedRoute>
-            }
+            element={user ? <ConnectionsPage /> : <Navigate to="/" />}
           />
           <Route
-            path="/chat/:connectionId"
-            element={
-              <ProtectedRoute>
-                <Chat />
-              </ProtectedRoute>
-            }
+            path="/chats"
+            element={user ? <ChatsPage /> : <Navigate to="/" />}
           />
           <Route
-            path="/profile/:userId?"
-            element={
-              <ProtectedRoute>
-                <Profile />
-              </ProtectedRoute>
-            }
+            path="/profile"
+            element={user ? <ProfilePage /> : <Navigate to="/" />}
           />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
-  )
+  );
 }
 
-export default App
+export default App;
