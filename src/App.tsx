@@ -1,103 +1,126 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { supabase } from "./lib/supabase";
-import { useUserStore } from "./stores/userStore";
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { supabase } from './lib/supabase';
+import { useUserStore } from './stores/userStore';
+import { FullPageLoader } from './components/ui';
+import { AppLayout } from './components/layout';
+import { Landing, Signup, Login } from './pages/auth';
+import { Onboarding } from './pages/onboarding';
+import { Discovery, Feed, Chats, ChatRoom, Profile, Settings } from './pages/app';
 
-// Pages
-import LandingPage from "./pages/LandingPage";
-import OnboardingPage from "./pages/OnboardingPage";
-import DiscoveryPage from "./pages/DiscoveryPage";
-import FeedPage from "./pages/FeedPage";
-import ConnectionsPage from "./pages/ConnectionsPage";
-import ChatsPage from "./pages/ChatsPage";
-import ProfilePage from "./pages/ProfilePage";
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5,
+      retry: 1,
+    },
+  },
+});
 
-const queryClient = new QueryClient();
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { user, isLoading } = useUserStore();
 
-function App() {
-  const { user, setUser } = useUserStore();
-  const [loading, setLoading] = useState(true);
+  if (isLoading) {
+    return <FullPageLoader />;
+  }
+
+  if (!user) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (!user.onboarding_completed) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+const AuthRoute = ({ children }: { children: React.ReactNode }) => {
+  const { user, isLoading } = useUserStore();
+
+  if (isLoading) {
+    return <FullPageLoader />;
+  }
+
+  if (user?.onboarding_completed) {
+    return <Navigate to="/app" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+const AppContent = () => {
+  const { setUser, setLoading } = useUserStore();
 
   useEffect(() => {
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        // Fetch user profile
-        supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single()
-          .then(({ data }) => {
-            if (data) setUser(data);
-          });
-      }
-      setLoading(false);
-    });
+    const initAuth = async () => {
+      setLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
 
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
-        supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single()
-          .then(({ data }) => {
-            if (data) setUser(data);
-          });
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        setUser(profile);
       } else {
         setUser(null);
       }
-    });
+    };
 
-    return () => subscription.unsubscribe();
-  }, [setUser]);
+    initAuth();
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary-50 to-primary-100">
-        <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary-500 border-t-transparent"></div>
-      </div>
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .maybeSingle();
+
+          setUser(profile);
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null);
+        }
+      }
     );
-  }
 
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [setUser, setLoading]);
+
+  return (
+    <Routes>
+      <Route path="/" element={<AuthRoute><Landing /></AuthRoute>} />
+      <Route path="/signup" element={<AuthRoute><Signup /></AuthRoute>} />
+      <Route path="/login" element={<AuthRoute><Login /></AuthRoute>} />
+      <Route path="/onboarding" element={<Onboarding />} />
+
+      <Route path="/app" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+        <Route index element={<Discovery />} />
+        <Route path="feed" element={<Feed />} />
+        <Route path="chats" element={<Chats />} />
+        <Route path="profile" element={<Profile />} />
+        <Route path="settings" element={<Settings />} />
+      </Route>
+
+      <Route path="/app/chats/:connectionId" element={<ProtectedRoute><ChatRoom /></ProtectedRoute>} />
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+};
+
+function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Routes>
-          <Route
-            path="/"
-            element={user ? <Navigate to="/discover" /> : <LandingPage />}
-          />
-          <Route
-            path="/onboarding"
-            element={user ? <OnboardingPage /> : <Navigate to="/" />}
-          />
-          <Route
-            path="/discover"
-            element={user ? <DiscoveryPage /> : <Navigate to="/" />}
-          />
-          <Route
-            path="/feed"
-            element={user ? <FeedPage /> : <Navigate to="/" />}
-          />
-          <Route
-            path="/connections"
-            element={user ? <ConnectionsPage /> : <Navigate to="/" />}
-          />
-          <Route
-            path="/chats"
-            element={user ? <ChatsPage /> : <Navigate to="/" />}
-          />
-          <Route
-            path="/profile"
-            element={user ? <ProfilePage /> : <Navigate to="/" />}
-          />
-        </Routes>
+        <AppContent />
       </BrowserRouter>
     </QueryClientProvider>
   );

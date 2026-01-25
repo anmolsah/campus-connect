@@ -1,66 +1,115 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-@theme {
-  /* Primary Colors */
-  --color-primary-50: #f5f3ff;
-  --color-primary-100: #ede9fe;
-  --color-primary-200: #ddd6fe;
-  --color-primary-300: #c4b5fd;
-  --color-primary-400: #a78bfa;
-  --color-primary-500: #8b5cf6;
-  --color-primary-600: #7c3aed;
-  --color-primary-700: #6d28d9;
-  --color-primary-800: #5b21b6;
-  --color-primary-900: #4c1d95;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  /* Mode Colors */
-  --color-study: #3b82f6;
-  --color-social: #10b981;
-  --color-project: #f59e0b;
+@layer base {
+  html {
+    @apply scroll-smooth antialiased;
+  }
 
-  /* Semantic Colors */
-  --color-success: #10b981;
-  --color-error: #ef4444;
-  --color-warning: #f59e0b;
+  body {
+    @apply bg-slate-50 text-slate-900 font-sans;
+  }
+
+  * {
+    @apply border-slate-200;
+  }
 }
 
-* {
-  -webkit-tap-highlight-color: transparent;
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2.5 rounded-xl font-medium text-sm
+           transition-all duration-200 ease-out
+           focus:outline-none focus:ring-2 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-primary-600 text-white
+           hover:bg-primary-700 active:bg-primary-800
+           focus:ring-primary-500;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-slate-700 border border-slate-200
+           hover:bg-slate-50 active:bg-slate-100
+           focus:ring-slate-400;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent text-slate-600
+           hover:bg-slate-100 active:bg-slate-200
+           focus:ring-slate-400;
+  }
+
+  .input {
+    @apply w-full px-4 py-3 rounded-xl border border-slate-200 bg-white
+           text-slate-900 placeholder-slate-400
+           transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent
+           disabled:bg-slate-50 disabled:text-slate-500;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl shadow-soft border border-slate-100;
+  }
+
+  .card-hover {
+    @apply card transition-all duration-200
+           hover:shadow-soft-lg hover:border-slate-200 hover:-translate-y-0.5;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-study {
+    @apply badge bg-study-light text-study-dark;
+  }
+
+  .badge-social {
+    @apply badge bg-social-light text-social-dark;
+  }
+
+  .badge-project {
+    @apply badge bg-project-light text-project-dark;
+  }
+
+  .link {
+    @apply text-primary-600 hover:text-primary-700 font-medium
+           transition-colors duration-200;
+  }
+
+  .section-title {
+    @apply text-2xl font-semibold text-slate-900 tracking-tight;
+  }
+
+  .section-subtitle {
+    @apply text-slate-500 mt-1;
+  }
 }
 
-body {
-  font-family:
-    "Inter",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 
-::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 3px;
-}
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-/* Smooth transitions */
-* {
-  transition-property:
-    color, background-color, border-color, text-decoration-color, fill, stroke;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
 }
