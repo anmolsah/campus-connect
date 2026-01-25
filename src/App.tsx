@@ -56,26 +56,10 @@ const AppContent = () => {
   useEffect(() => {
     const initAuth = async () => {
       setLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
 
-      if (session?.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .maybeSingle();
-
-        setUser(profile);
-      } else {
-        setUser(null);
-      }
-    };
-
-    initAuth();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (session?.user) {
           const { data: profile } = await supabase
             .from('profiles')
             .select('*')
@@ -83,6 +67,34 @@ const AppContent = () => {
             .maybeSingle();
 
           setUser(profile);
+        } else {
+          setUser(null);
+        }
+      } catch (error) {
+        console.error('Auth init error:', error);
+        setUser(null);
+      }
+    };
+
+    initAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === 'SIGNED_IN' && session?.user) {
+          (async () => {
+            try {
+              const { data: profile } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', session.user.id)
+                .maybeSingle();
+
+              setUser(profile);
+            } catch (error) {
+              console.error('Profile fetch error:', error);
+              setUser(null);
+            }
+          })();
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
         }

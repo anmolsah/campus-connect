@@ -32,49 +32,53 @@ export const Feed = () => {
 
     setIsLoading(true);
 
-    const { data: postsData } = await supabase
-      .from('posts')
-      .select(`
-        *,
-        author:profiles!posts_author_id_fkey(*)
-      `)
-      .eq('moderation_status', 'approved')
-      .eq('mode_context', currentMode)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    try {
+      const { data: postsData } = await supabase
+        .from('posts')
+        .select(`
+          *,
+          author:profiles!posts_author_id_fkey(*)
+        `)
+        .eq('moderation_status', 'approved')
+        .eq('mode_context', currentMode)
+        .order('created_at', { ascending: false })
+        .limit(50);
 
-    if (postsData) {
-      let filteredPosts = postsData as PostWithAuthor[];
+      if (postsData) {
+        let filteredPosts = postsData as PostWithAuthor[];
 
-      if (showOwnCampusOnly && user.college_name) {
-        filteredPosts = filteredPosts.filter((post) =>
-          post.author?.college_name === user.college_name
-        );
+        if (showOwnCampusOnly && user.college_name) {
+          filteredPosts = filteredPosts.filter((post) =>
+            post.author?.college_name === user.college_name
+          );
+        }
+
+        const { data: likes } = await supabase
+          .from('post_likes')
+          .select('post_id')
+          .eq('user_id', user.id);
+
+        const { data: saves } = await supabase
+          .from('saved_posts')
+          .select('post_id')
+          .eq('user_id', user.id);
+
+        const likedPostIds = new Set(likes?.map((l) => l.post_id) || []);
+        const savedPostIds = new Set(saves?.map((s) => s.post_id) || []);
+
+        const postsWithFlags = filteredPosts.map((post) => ({
+          ...post,
+          is_liked: likedPostIds.has(post.id),
+          is_saved: savedPostIds.has(post.id),
+        }));
+
+        setPosts(postsWithFlags);
       }
-
-      const { data: likes } = await supabase
-        .from('post_likes')
-        .select('post_id')
-        .eq('user_id', user.id);
-
-      const { data: saves } = await supabase
-        .from('saved_posts')
-        .select('post_id')
-        .eq('user_id', user.id);
-
-      const likedPostIds = new Set(likes?.map((l) => l.post_id) || []);
-      const savedPostIds = new Set(saves?.map((s) => s.post_id) || []);
-
-      const postsWithFlags = filteredPosts.map((post) => ({
-        ...post,
-        is_liked: likedPostIds.has(post.id),
-        is_saved: savedPostIds.has(post.id),
-      }));
-
-      setPosts(postsWithFlags);
+    } catch (error) {
+      console.error('Error fetching posts:', error);
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleModeChange = async (mode: Mode) => {

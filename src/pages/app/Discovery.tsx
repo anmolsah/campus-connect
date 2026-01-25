@@ -25,38 +25,47 @@ export const Discovery = () => {
     if (!user) return;
 
     setIsLoading(true);
-    let query = supabase
-      .from('profiles')
-      .select('*')
-      .eq('current_mode', currentMode)
-      .eq('is_verified', true)
-      .eq('onboarding_completed', true)
-      .neq('id', user.id)
-      .order('last_active', { ascending: false })
-      .limit(50);
+    try {
+      let query = supabase
+        .from('profiles')
+        .select('*')
+        .eq('current_mode', currentMode)
+        .eq('is_verified', true)
+        .eq('onboarding_completed', true)
+        .neq('id', user.id)
+        .order('last_active', { ascending: false })
+        .limit(50);
 
-    if (showOwnCampusOnly && user.college_name) {
-      query = query.eq('college_name', user.college_name);
+      if (showOwnCampusOnly && user.college_name) {
+        query = query.eq('college_name', user.college_name);
+      }
+
+      const { data, error } = await query;
+
+      if (!error && data) {
+        setProfiles(data);
+      }
+    } catch (error) {
+      console.error('Error fetching profiles:', error);
+    } finally {
+      setIsLoading(false);
     }
-
-    const { data, error } = await query;
-
-    if (!error && data) {
-      setProfiles(data);
-    }
-    setIsLoading(false);
   };
 
   const fetchConnections = async () => {
     if (!user) return;
 
-    const { data } = await supabase
-      .from('connections')
-      .select('*')
-      .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
+    try {
+      const { data } = await supabase
+        .from('connections')
+        .select('*')
+        .or(`requester_id.eq.${user.id},receiver_id.eq.${user.id}`);
 
-    if (data) {
-      setConnections(data);
+      if (data) {
+        setConnections(data);
+      }
+    } catch (error) {
+      console.error('Error fetching connections:', error);
     }
   };
 
@@ -72,19 +81,23 @@ export const Discovery = () => {
   const handleConnect = async (profileId: string) => {
     if (!user) return;
 
-    const { data, error } = await supabase
-      .from('connections')
-      .insert({
-        requester_id: user.id,
-        receiver_id: profileId,
-        mode_context: currentMode,
-        request_message: `Hey! I'd like to connect in ${currentMode} mode`,
-      })
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('connections')
+        .insert({
+          requester_id: user.id,
+          receiver_id: profileId,
+          mode_context: currentMode,
+          request_message: `Hey! I'd like to connect in ${currentMode} mode`,
+        })
+        .select()
+        .single();
 
-    if (!error && data) {
-      setConnections([...connections, data]);
+      if (!error && data) {
+        setConnections([...connections, data]);
+      }
+    } catch (error) {
+      console.error('Connection error:', error);
     }
   };
 
