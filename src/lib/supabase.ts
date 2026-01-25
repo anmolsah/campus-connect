@@ -16,11 +16,21 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-export const ALLOWED_DOMAINS = ['edu'];
+// Allow various educational domain formats
+// Examples: .edu, .edu.in, .ac.in, etc.
+export const ALLOWED_DOMAINS = ['edu', 'edu.in', 'ac.in', 'edu.pk', 'ac.uk', 'com'];
 
 export const validateEmailDomain = (email: string): boolean => {
+  // Basic email format validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return false;
+  }
+
   const domain = email.split('@')[1]?.toLowerCase() || '';
-  return ALLOWED_DOMAINS.some(allowed => domain.endsWith(`.${allowed}`));
+  
+  // Check if domain ends with any of the allowed educational domains
+  return ALLOWED_DOMAINS.some(allowed => domain.endsWith(`.${allowed}`) || domain === allowed);
 };
 
 export const uploadFile = async (

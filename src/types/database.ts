@@ -30,6 +30,7 @@ export interface Database {
           current_mode: Mode;
           last_active: string;
           onboarding_completed: boolean;
+          show_own_campus_only: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -47,6 +48,7 @@ export interface Database {
           current_mode?: Mode;
           last_active?: string;
           onboarding_completed?: boolean;
+          show_own_campus_only?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -64,6 +66,7 @@ export interface Database {
           current_mode?: Mode;
           last_active?: string;
           onboarding_completed?: boolean;
+          show_own_campus_only?: boolean;
           created_at?: string;
           updated_at?: string;
         };
