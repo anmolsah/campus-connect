@@ -1,30 +1,52 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Users, UserPlus, Check, BadgeCheck, MapPin, Search } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useUserStore } from '../../stores/userStore';
+import { useDataStore } from '../../stores/dataStore';
 import { Avatar, LoadingSpinner } from '../../components/ui';
 import { ProfileModal } from '../../components/discovery/ProfileModal';
 import type { Profile, Connection, Mode } from '../../types';
 
 export const Discovery = () => {
   const { user, currentMode, setMode, showOwnCampusOnly, setShowOwnCampusOnly, updateProfile } = useUserStore();
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const {
+    discoveryProfiles,
+    discoveryConnections,
+    setDiscoveryData,
+    updateDiscoveryConnection,
+    shouldRefetchDiscovery,
+  } = useDataStore();
+
+  const [profiles, setProfiles] = useState<Profile[]>(discoveryProfiles);
+  const [connections, setConnections] = useState<Connection[]>(discoveryConnections);
+  const [isLoading, setIsLoading] = useState(discoveryProfiles.length === 0);
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    if (user) {
-      fetchProfiles();
-      fetchConnections();
-    }
-  }, [user, currentMode, showOwnCampusOnly]);
+  const lastFetchParams = useRef<{ mode: string; campus: boolean; userCampus: string | null } | null>(null);
 
-  const fetchProfiles = async () => {
+  const fetchProfiles = useCallback(async (forceRefetch = false) => {
     if (!user) return;
 
+    const currentParams = {
+      mode: currentMode,
+      campus: showOwnCampusOnly,
+      userCampus: user.college_name,
+    };
+
+    const paramsChanged = !lastFetchParams.current ||
+      lastFetchParams.current.mode !== currentParams.mode ||
+      lastFetchParams.current.campus !== currentParams.campus;
+
+    if (!forceRefetch && !paramsChanged && discoveryProfiles.length > 0) {
+      setProfiles(discoveryProfiles);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
+    lastFetchParams.current = currentParams;
+
     try {
       let query = supabase
         .from('profiles')
@@ -44,15 +66,16 @@ export const Discovery = () => {
 
       if (!error && data) {
         setProfiles(data);
+        setDiscoveryData(data, connections);
       }
     } catch (error) {
       console.error('Error fetching profiles:', error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user, currentMode, showOwnCampusOnly, discoveryProfiles, connections, setDiscoveryData]);
 
-  const fetchConnections = async () => {
+  const fetchConnections = useCallback(async () => {
     if (!user) return;
 
     try {
@@ -63,11 +86,23 @@ export const Discovery = () => {
 
       if (data) {
         setConnections(data);
+        setDiscoveryData(profiles, data);
       }
     } catch (error) {
       console.error('Error fetching connections:', error);
     }
-  };
+  }, [user, profiles, setDiscoveryData]);
+
+  useEffect(() => {
+    if (user) {
+      fetchProfiles();
+      if (discoveryConnections.length === 0) {
+        fetchConnections();
+      } else {
+        setConnections(discoveryConnections);
+      }
+    }
+  }, [user, currentMode, showOwnCampusOnly]);
 
   const getConnectionStatus = (profileId: string) => {
     const connection = connections.find(
@@ -94,7 +129,9 @@ export const Discovery = () => {
         .single();
 
       if (!error && data) {
-        setConnections([...connections, data]);
+        const newConnections = [...connections, data];
+        setConnections(newConnections);
+        updateDiscoveryConnection(data);
       }
     } catch (error) {
       console.error('Connection error:', error);

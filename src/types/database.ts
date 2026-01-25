@@ -399,4 +399,22 @@ export type PostWithAuthor = Post & {
 export type CommentWithAuthor = PostComment & {
   author: Profile;
   replies?: CommentWithAuthor[];
+  is_liked?: boolean;
 };
+
+export interface UserPresence {
+  id: string;
+  user_id: string;
+  is_online: boolean;
+  last_seen: string;
+  current_chat_id: string | null;
+  is_typing: boolean;
+  updated_at: string;
+}
+
+export interface CommentLike {
+  id: string;
+  comment_id: string;
+  user_id: string;
+  created_at: string;
+}

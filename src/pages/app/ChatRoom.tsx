@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Smile } from 'lucide-react';
+import { ArrowLeft, Send } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { supabase } from '../../lib/supabase';
 import { useUserStore } from '../../stores/userStore';
 import { Avatar, LoadingSpinner } from '../../components/ui';
-import type { Message, Profile, Connection } from '../../types';
+import type { Message, Profile, Connection, UserPresence } from '../../types';
 
 export const ChatRoom = () => {
   const { connectionId } = useParams<{ connectionId: string }>();
@@ -17,30 +17,74 @@ export const ChatRoom = () => {
   const [isSending, setIsSending] = useState(false);
   const [otherUser, setOtherUser] = useState<Profile | null>(null);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [otherUserPresence, setOtherUserPresence] = useState<UserPresence | null>(null);
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  useEffect(() => {
-    if (connectionId && user) {
-      fetchConnection();
-      fetchMessages();
-      subscribeToMessages();
-    }
-
-    return () => {
-      supabase.removeAllChannels();
-    };
-  }, [connectionId, user]);
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, scrollToBottom]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const updateMyPresence = useCallback(async (isTyping: boolean) => {
+    if (!user || !connectionId) return;
 
-  const fetchConnection = async () => {
+    try {
+      const { data: existing } = await supabase
+        .from('user_presence')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (existing) {
+        await supabase
+          .from('user_presence')
+          .update({
+            is_online: true,
+            current_chat_id: connectionId,
+            is_typing: isTyping,
+            last_seen: new Date().toISOString(),
+          })
+          .eq('user_id', user.id);
+      } else {
+        await supabase
+          .from('user_presence')
+          .insert({
+            user_id: user.id,
+            is_online: true,
+            current_chat_id: connectionId,
+            is_typing: isTyping,
+          });
+      }
+    } catch (error) {
+      console.error('Error updating presence:', error);
+    }
+  }, [user, connectionId]);
+
+  const clearMyPresence = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      await supabase
+        .from('user_presence')
+        .update({
+          current_chat_id: null,
+          is_typing: false,
+          last_seen: new Date().toISOString(),
+        })
+        .eq('user_id', user.id);
+    } catch (error) {
+      console.error('Error clearing presence:', error);
+    }
+  }, [user]);
+
+  const fetchConnection = useCallback(async () => {
     if (!connectionId || !user) return;
 
     const { data } = await supabase
@@ -57,25 +101,43 @@ export const ChatRoom = () => {
       setConnection(data);
       const other = data.requester_id === user.id ? data.receiver : data.requester;
       setOtherUser(other);
-    }
-  };
 
-  const fetchMessages = async () => {
+      const { data: presenceData } = await supabase
+        .from('user_presence')
+        .select('*')
+        .eq('user_id', other.id)
+        .maybeSingle();
+
+      if (presenceData) {
+        setOtherUserPresence(presenceData);
+        setIsOtherTyping(
+          presenceData.is_typing && presenceData.current_chat_id === connectionId
+        );
+      }
+    }
+  }, [connectionId, user]);
+
+  const fetchMessages = useCallback(async () => {
     if (!connectionId) return;
 
     setIsLoading(true);
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('connection_id', connectionId)
-      .order('created_at', { ascending: true });
+    try {
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('connection_id', connectionId)
+        .order('created_at', { ascending: true });
 
-    if (data) {
-      setMessages(data);
-      markMessagesAsRead(data);
+      if (data) {
+        setMessages(data);
+        markMessagesAsRead(data);
+      }
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-  };
+  }, [connectionId]);
 
   const markMessagesAsRead = async (msgs: Message[]) => {
     if (!user) return;
@@ -92,10 +154,10 @@ export const ChatRoom = () => {
     }
   };
 
-  const subscribeToMessages = () => {
-    if (!connectionId) return;
+  const setupRealtimeSubscriptions = useCallback(() => {
+    if (!connectionId || !otherUser) return;
 
-    const channel = supabase
+    const messagesChannel = supabase
       .channel(`chat:${connectionId}`)
       .on(
         'postgres_changes',
@@ -107,7 +169,10 @@ export const ChatRoom = () => {
         },
         (payload) => {
           const newMsg = payload.new as Message;
-          setMessages((prev) => [...prev, newMsg]);
+          setMessages((prev) => {
+            if (prev.some(m => m.id === newMsg.id)) return prev;
+            return [...prev, newMsg];
+          });
 
           if (newMsg.sender_id !== user?.id) {
             supabase
@@ -119,10 +184,76 @@ export const ChatRoom = () => {
       )
       .subscribe();
 
+    const presenceChannel = supabase
+      .channel(`presence:${otherUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user_presence',
+          filter: `user_id=eq.${otherUser.id}`,
+        },
+        (payload) => {
+          const presence = payload.new as UserPresence;
+          setOtherUserPresence(presence);
+          setIsOtherTyping(
+            presence.is_typing && presence.current_chat_id === connectionId
+          );
+        }
+      )
+      .subscribe();
+
+    presenceChannelRef.current = presenceChannel;
+
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(presenceChannel);
     };
-  };
+  }, [connectionId, otherUser, user?.id]);
+
+  useEffect(() => {
+    if (connectionId && user) {
+      fetchConnection();
+      fetchMessages();
+      updateMyPresence(false);
+    }
+
+    return () => {
+      clearMyPresence();
+      supabase.removeAllChannels();
+    };
+  }, [connectionId, user]);
+
+  useEffect(() => {
+    if (otherUser) {
+      const cleanup = setupRealtimeSubscriptions();
+      return cleanup;
+    }
+  }, [otherUser, setupRealtimeSubscriptions]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      clearMyPresence();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [clearMyPresence]);
+
+  const handleTyping = useCallback(() => {
+    updateMyPresence(true);
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      updateMyPresence(false);
+    }, 2000);
+  }, [updateMyPresence]);
 
   const handleSend = async () => {
     if (!newMessage.trim() || !connectionId || !user || isSending) return;
@@ -130,15 +261,24 @@ export const ChatRoom = () => {
     setIsSending(true);
     const content = newMessage.trim();
     setNewMessage('');
+    updateMyPresence(false);
 
-    const { error } = await supabase.from('messages').insert({
-      connection_id: connectionId,
-      sender_id: user.id,
-      content,
-      message_type: 'text',
-    });
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
 
-    if (error) {
+    try {
+      const { error } = await supabase.from('messages').insert({
+        connection_id: connectionId,
+        sender_id: user.id,
+        content,
+        message_type: 'text',
+      });
+
+      if (error) {
+        setNewMessage(content);
+      }
+    } catch (error) {
       setNewMessage(content);
     }
 
@@ -175,6 +315,24 @@ export const ChatRoom = () => {
     return groups;
   };
 
+  const getOnlineStatus = () => {
+    if (!otherUserPresence) return null;
+
+    if (otherUserPresence.is_online) {
+      const lastSeen = new Date(otherUserPresence.last_seen);
+      const now = new Date();
+      const diffMinutes = (now.getTime() - lastSeen.getTime()) / (1000 * 60);
+
+      if (diffMinutes < 5) {
+        return 'online';
+      }
+    }
+
+    return 'offline';
+  };
+
+  const onlineStatus = getOnlineStatus();
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -197,23 +355,36 @@ export const ChatRoom = () => {
           </button>
           {otherUser && (
             <div className="flex items-center gap-3">
-              <Avatar
-                src={otherUser.avatar_url}
-                name={otherUser.full_name}
-                size="sm"
-              />
+              <div className="relative">
+                <Avatar
+                  src={otherUser.avatar_url}
+                  name={otherUser.full_name}
+                  size="sm"
+                />
+                {onlineStatus === 'online' && (
+                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white" />
+                )}
+              </div>
               <div>
                 <h2 className="font-semibold text-slate-900">
                   {otherUser.full_name}
                 </h2>
-                <p className="text-xs text-slate-500">{otherUser.major}</p>
+                <p className="text-xs text-slate-500">
+                  {isOtherTyping ? (
+                    <span className="text-blue-500 font-medium">typing...</span>
+                  ) : onlineStatus === 'online' ? (
+                    <span className="text-green-500">Active now</span>
+                  ) : (
+                    otherUser.major
+                  )}
+                </p>
               </div>
             </div>
           )}
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 pb-20">
+      <div className="flex-1 overflow-y-auto px-4 py-4 pb-24">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <Avatar
@@ -229,60 +400,81 @@ export const ChatRoom = () => {
             </p>
           </div>
         ) : (
-          messageGroups.map((group) => (
-            <div key={group.date}>
-              <div className="flex items-center justify-center my-4">
-                <span className="px-3 py-1 bg-slate-200 rounded-full text-xs font-medium text-slate-600">
-                  {formatDateHeader(group.messages[0].created_at)}
-                </span>
-              </div>
+          <>
+            {messageGroups.map((group) => (
+              <div key={group.date}>
+                <div className="flex items-center justify-center my-4">
+                  <span className="px-3 py-1 bg-slate-200 rounded-full text-xs font-medium text-slate-600">
+                    {formatDateHeader(group.messages[0].created_at)}
+                  </span>
+                </div>
 
-              {group.messages.map((message, index) => {
-                const isOwn = message.sender_id === user?.id;
-                const showAvatar =
-                  !isOwn &&
-                  (index === 0 ||
-                    group.messages[index - 1].sender_id !== message.sender_id);
+                {group.messages.map((message, index) => {
+                  const isOwn = message.sender_id === user?.id;
+                  const showAvatar =
+                    !isOwn &&
+                    (index === 0 ||
+                      group.messages[index - 1].sender_id !== message.sender_id);
 
-                return (
-                  <div
-                    key={message.id}
-                    className={`flex items-end gap-2 mb-2 ${isOwn ? 'justify-end' : 'justify-start'}`}
-                  >
-                    {!isOwn && (
-                      <div className="w-8">
-                        {showAvatar && (
-                          <Avatar
-                            src={otherUser?.avatar_url}
-                            name={otherUser?.full_name}
-                            size="xs"
-                          />
-                        )}
-                      </div>
-                    )}
+                  return (
                     <div
-                      className={`
-                        max-w-[75%] px-4 py-2.5 rounded-2xl
-                        ${isOwn
-                          ? 'bg-primary-600 text-white rounded-br-md'
-                          : 'bg-white text-slate-900 rounded-bl-md shadow-sm border border-slate-100'
-                        }
-                      `}
+                      key={message.id}
+                      className={`flex items-end gap-2 mb-2 ${isOwn ? 'justify-end' : 'justify-start'}`}
                     >
-                      <p className="text-sm whitespace-pre-wrap break-words">
-                        {message.content}
-                      </p>
-                      <p
-                        className={`text-2xs mt-1 ${isOwn ? 'text-primary-200' : 'text-slate-400'}`}
+                      {!isOwn && (
+                        <div className="w-8">
+                          {showAvatar && (
+                            <Avatar
+                              src={otherUser?.avatar_url}
+                              name={otherUser?.full_name}
+                              size="xs"
+                            />
+                          )}
+                        </div>
+                      )}
+                      <div
+                        className={`
+                          max-w-[75%] px-4 py-2.5 rounded-2xl
+                          ${isOwn
+                            ? 'bg-blue-500 text-white rounded-br-md'
+                            : 'bg-white text-slate-900 rounded-bl-md shadow-sm border border-slate-100'
+                          }
+                        `}
                       >
-                        {formatMessageTime(message.created_at)}
-                      </p>
+                        <p className="text-sm whitespace-pre-wrap break-words">
+                          {message.content}
+                        </p>
+                        <p
+                          className={`text-[10px] mt-1 ${isOwn ? 'text-blue-200' : 'text-slate-400'}`}
+                        >
+                          {formatMessageTime(message.created_at)}
+                        </p>
+                      </div>
                     </div>
+                  );
+                })}
+              </div>
+            ))}
+
+            {isOtherTyping && (
+              <div className="flex items-end gap-2 mb-2">
+                <div className="w-8">
+                  <Avatar
+                    src={otherUser?.avatar_url}
+                    name={otherUser?.full_name}
+                    size="xs"
+                  />
+                </div>
+                <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-md shadow-sm border border-slate-100">
+                  <div className="flex gap-1">
+                    <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
-                );
-              })}
-            </div>
-          ))
+                </div>
+              </div>
+            )}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -293,7 +485,10 @@ export const ChatRoom = () => {
             ref={inputRef}
             type="text"
             value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
+            onChange={(e) => {
+              setNewMessage(e.target.value);
+              handleTyping();
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -301,12 +496,12 @@ export const ChatRoom = () => {
               }
             }}
             placeholder="Type a message..."
-            className="flex-1 px-4 py-3 bg-slate-100 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            className="flex-1 px-4 py-3 bg-slate-100 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button
             onClick={handleSend}
             disabled={!newMessage.trim() || isSending}
-            className="p-3 bg-primary-600 text-white rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary-700 transition-colors"
+            className="p-3 bg-blue-500 text-white rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-600 transition-colors"
           >
             <Send className="w-5 h-5" />
           </button>

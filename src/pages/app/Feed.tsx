@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Bell, Image, Link2, Heart, MessageCircle, Send } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { supabase } from '../../lib/supabase';
 import { useUserStore } from '../../stores/userStore';
+import { useDataStore } from '../../stores/dataStore';
 import { Avatar, LoadingSpinner } from '../../components/ui';
 import { CreatePostModal } from '../../components/feed/CreatePostModal';
 import { CommentsModal } from '../../components/feed/CommentsModal';
@@ -16,21 +17,26 @@ interface PostWithAuthor extends Post {
 
 export const Feed = () => {
   const { user, currentMode, setMode, showOwnCampusOnly, setShowOwnCampusOnly, updateProfile } = useUserStore();
-  const [posts, setPosts] = useState<PostWithAuthor[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { feedPosts, feedMode, setFeedData, updateFeedPost } = useDataStore();
+
+  const [posts, setPosts] = useState<PostWithAuthor[]>(feedPosts);
+  const [isLoading, setIsLoading] = useState(feedPosts.length === 0 || feedMode !== currentMode);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (user) {
-      fetchPosts();
-    }
-  }, [user, currentMode, showOwnCampusOnly]);
+  const lastFetchMode = useRef<string | null>(feedMode);
 
-  const fetchPosts = async () => {
+  const fetchPosts = useCallback(async (forceRefetch = false) => {
     if (!user) return;
 
+    if (!forceRefetch && feedPosts.length > 0 && feedMode === currentMode) {
+      setPosts(feedPosts);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
+    lastFetchMode.current = currentMode;
 
     try {
       const { data: postsData } = await supabase
@@ -73,13 +79,20 @@ export const Feed = () => {
         }));
 
         setPosts(postsWithFlags);
+        setFeedData(postsWithFlags, currentMode);
       }
     } catch (error) {
       console.error('Error fetching posts:', error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user, currentMode, showOwnCampusOnly, feedPosts, feedMode, setFeedData]);
+
+  useEffect(() => {
+    if (user) {
+      fetchPosts();
+    }
+  }, [user, currentMode, showOwnCampusOnly]);
 
   const handleModeChange = async (mode: Mode) => {
     setMode(mode);
@@ -107,29 +120,47 @@ export const Feed = () => {
   const handleLike = async (postId: string, isLiked: boolean) => {
     if (!user) return;
 
-    if (isLiked) {
-      await supabase
-        .from('post_likes')
-        .delete()
-        .eq('post_id', postId)
-        .eq('user_id', user.id);
-    } else {
-      await supabase
-        .from('post_likes')
-        .insert({ post_id: postId, user_id: user.id });
-    }
+    const currentPost = posts.find(p => p.id === postId);
+    if (!currentPost) return;
+
+    const newLikeCount = currentPost.likes_count + (isLiked ? -1 : 1);
 
     setPosts((prev) =>
       prev.map((post) =>
         post.id === postId
-          ? {
-              ...post,
-              is_liked: !isLiked,
-              likes_count: post.likes_count + (isLiked ? -1 : 1),
-            }
+          ? { ...post, is_liked: !isLiked, likes_count: newLikeCount }
           : post
       )
     );
+
+    updateFeedPost(postId, { is_liked: !isLiked, likes_count: newLikeCount });
+
+    try {
+      if (isLiked) {
+        await supabase
+          .from('post_likes')
+          .delete()
+          .eq('post_id', postId)
+          .eq('user_id', user.id);
+      } else {
+        await supabase
+          .from('post_likes')
+          .insert({ post_id: postId, user_id: user.id });
+      }
+    } catch (error) {
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? { ...post, is_liked: isLiked, likes_count: currentPost.likes_count }
+            : post
+        )
+      );
+    }
+  };
+
+  const handlePostCreated = () => {
+    setShowCreateModal(false);
+    fetchPosts(true);
   };
 
   const getModeColor = (mode: Mode) => {
@@ -306,10 +337,7 @@ export const Feed = () => {
       {showCreateModal && (
         <CreatePostModal
           onClose={() => setShowCreateModal(false)}
-          onCreated={() => {
-            setShowCreateModal(false);
-            fetchPosts();
-          }}
+          onCreated={handlePostCreated}
         />
       )}
 
@@ -317,7 +345,7 @@ export const Feed = () => {
         <CommentsModal
           postId={selectedPostId}
           onClose={() => setSelectedPostId(null)}
-          onCommentAdded={fetchPosts}
+          onCommentAdded={() => fetchPosts(true)}
         />
       )}
     </div>
