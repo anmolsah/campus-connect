@@ -1,35 +1,39 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  GraduationCap, Upload, User, Building, BookOpen, FileText, Camera,
-  ArrowRight, ArrowLeft, Check, BookOpenCheck, Users, Rocket
-} from 'lucide-react';
-import { supabase, uploadFile } from '../../lib/supabase';
-import { useUserStore } from '../../stores/userStore';
-import { LoadingSpinner, Avatar } from '../../components/ui';
-import type { Mode } from '../../types';
-
-const COLLEGES = [
-  'Partner College',
-  'State University',
-  'Tech Institute',
-  'Liberal Arts College',
-  'Community College',
-];
+  GraduationCap,
+  Upload,
+  User,
+  Building,
+  BookOpen,
+  FileText,
+  Camera,
+  ArrowRight,
+  ArrowLeft,
+  Check,
+  BookOpenCheck,
+  Users,
+  Rocket,
+} from "lucide-react";
+import { supabase, uploadFile } from "../../lib/supabase";
+import { useUserStore } from "../../stores/userStore";
+import { LoadingSpinner, Avatar } from "../../components/ui";
+import type { Mode } from "../../types";
+import { COLLEGES } from "../../data/colleges";
 
 const MAJORS = [
-  'Computer Science',
-  'Business Administration',
-  'Engineering',
-  'Psychology',
-  'Biology',
-  'Communications',
-  'Economics',
-  'Political Science',
-  'Mathematics',
-  'English',
-  'Art & Design',
-  'Other',
+  "Computer Science",
+  "Business Administration",
+  "Engineering",
+  "Psychology",
+  "Biology",
+  "Communications",
+  "Economics",
+  "Political Science",
+  "Mathematics",
+  "English",
+  "Art & Design",
+  "Other",
 ];
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -46,35 +50,40 @@ export const Onboarding = () => {
   const { user, setUser } = useUserStore();
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const [idCardFile, setIdCardFile] = useState<File | null>(null);
   const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
-  const [fullName, setFullName] = useState('');
-  const [collegeName, setCollegeName] = useState('');
-  const [major, setMajor] = useState('');
-  const [graduationYear, setGraduationYear] = useState<number>(CURRENT_YEAR + 2);
-  const [bio, setBio] = useState('');
+  const [fullName, setFullName] = useState("");
+  const [collegeName, setCollegeName] = useState("");
+  const [customCollegeName, setCustomCollegeName] = useState("");
+  const [major, setMajor] = useState("");
+  const [graduationYear, setGraduationYear] = useState<number>(
+    CURRENT_YEAR + 2,
+  );
+  const [bio, setBio] = useState("");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
-  const [selectedMode, setSelectedMode] = useState<Mode>('social');
+  const [selectedMode, setSelectedMode] = useState<Mode>("social");
 
   useEffect(() => {
     const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) {
-        navigate('/');
+        navigate("/");
         return;
       }
 
       const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
         .maybeSingle();
 
       if (profile?.onboarding_completed) {
-        navigate('/app');
+        navigate("/app");
       }
     };
 
@@ -85,12 +94,12 @@ export const Onboarding = () => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        setError('File size must be less than 5MB');
+        setError("File size must be less than 5MB");
         return;
       }
       setIdCardFile(file);
       setIdCardPreview(URL.createObjectURL(file));
-      setError('');
+      setError("");
     }
   };
 
@@ -98,39 +107,44 @@ export const Onboarding = () => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 2 * 1024 * 1024) {
-        setError('File size must be less than 2MB');
+        setError("File size must be less than 2MB");
         return;
       }
       setAvatarFile(file);
       setAvatarPreview(URL.createObjectURL(file));
-      setError('');
+      setError("");
     }
   };
 
   const handleComplete = async () => {
     setIsLoading(true);
-    setError('');
+    setError("");
 
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (!authUser) throw new Error('Not authenticated');
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+      if (!authUser) throw new Error("Not authenticated");
 
       let idCardUrl = null;
       let avatarUrl = null;
 
       if (idCardFile) {
-        idCardUrl = await uploadFile('id-cards', idCardFile, authUser.id);
+        idCardUrl = await uploadFile("id-cards", idCardFile, authUser.id);
       }
 
       if (avatarFile) {
-        avatarUrl = await uploadFile('avatars', avatarFile, authUser.id);
+        avatarUrl = await uploadFile("avatars", avatarFile, authUser.id);
       }
 
+      const finalCollegeName =
+        collegeName === "Other" ? customCollegeName : collegeName;
+
       const { data: profile, error: updateError } = await supabase
-        .from('profiles')
+        .from("profiles")
         .update({
           full_name: fullName,
-          college_name: collegeName,
+          college_name: finalCollegeName,
           major,
           graduation_year: graduationYear,
           bio,
@@ -140,16 +154,16 @@ export const Onboarding = () => {
           is_verified: true,
           onboarding_completed: true,
         })
-        .eq('id', authUser.id)
+        .eq("id", authUser.id)
         .select()
         .single();
 
       if (updateError) throw updateError;
 
       setUser(profile);
-      navigate('/app');
+      navigate("/app");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
+      setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setIsLoading(false);
     }
@@ -157,14 +171,25 @@ export const Onboarding = () => {
 
   const canProceed = () => {
     switch (step) {
-      case 1: return idCardFile !== null;
-      case 2: return fullName.trim().length >= 2;
-      case 3: return collegeName !== '';
-      case 4: return major !== '';
-      case 5: return true;
-      case 6: return true;
-      case 7: return true;
-      default: return false;
+      case 1:
+        return idCardFile !== null;
+      case 2:
+        return fullName.trim().length >= 2;
+      case 3:
+        return (
+          collegeName !== "" &&
+          (collegeName !== "Other" || customCollegeName.trim().length >= 2)
+        );
+      case 4:
+        return major !== "";
+      case 5:
+        return true;
+      case 6:
+        return true;
+      case 7:
+        return true;
+      default:
+        return false;
     }
   };
 
@@ -180,8 +205,12 @@ export const Onboarding = () => {
               <GraduationCap className="w-5 h-5 text-white" />
             </div>
             <div>
-              <p className="text-sm font-medium text-slate-900">Campus Connect</p>
-              <p className="text-xs text-slate-500">Step {step} of {totalSteps}</p>
+              <p className="text-sm font-medium text-slate-900">
+                Campus Connect
+              </p>
+              <p className="text-xs text-slate-500">
+                Step {step} of {totalSteps}
+              </p>
             </div>
           </div>
           <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
@@ -197,18 +226,23 @@ export const Onboarding = () => {
         <div className="w-full max-w-lg">
           {step === 1 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">Upload your ID card</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                Upload your ID card
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
-                This helps us verify you're a real student. It won't be shown to others.
+                This helps us verify you're a real student. It won't be shown to
+                others.
               </p>
 
               <div className="mt-8">
                 <label className="block">
-                  <div className={`
+                  <div
+                    className={`
                     relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer
                     transition-all duration-200
-                    ${idCardPreview ? 'border-primary-300 bg-primary-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}
-                  `}>
+                    ${idCardPreview ? "border-primary-300 bg-primary-50" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"}
+                  `}
+                  >
                     {idCardPreview ? (
                       <div className="relative">
                         <img
@@ -217,7 +251,9 @@ export const Onboarding = () => {
                           className="max-h-48 mx-auto rounded-lg"
                         />
                         <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-lg opacity-0 hover:opacity-100 transition-opacity">
-                          <span className="text-white text-sm font-medium">Change image</span>
+                          <span className="text-white text-sm font-medium">
+                            Change image
+                          </span>
                         </div>
                       </div>
                     ) : (
@@ -245,7 +281,9 @@ export const Onboarding = () => {
 
           {step === 2 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">What's your name?</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                What's your name?
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
                 This is how other students will see you.
               </p>
@@ -271,32 +309,57 @@ export const Onboarding = () => {
 
           {step === 3 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">Where do you study?</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                Where do you study?
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
                 Select your college or university.
               </p>
 
-              <div className="mt-8">
+              <div className="mt-8 space-y-4">
                 <div className="relative">
                   <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <select
                     value={collegeName}
-                    onChange={(e) => setCollegeName(e.target.value)}
+                    onChange={(e) => {
+                      setCollegeName(e.target.value);
+                      if (e.target.value !== "Other") {
+                        setCustomCollegeName("");
+                      }
+                    }}
                     className="input pl-12 appearance-none cursor-pointer"
                   >
                     <option value="">Select your college</option>
                     {COLLEGES.map((college) => (
-                      <option key={college} value={college}>{college}</option>
+                      <option key={college} value={college}>
+                        {college}
+                      </option>
                     ))}
                   </select>
                 </div>
+
+                {collegeName === "Other" && (
+                  <div className="relative animate-fade-in">
+                    <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={customCollegeName}
+                      onChange={(e) => setCustomCollegeName(e.target.value)}
+                      placeholder="Enter your college name"
+                      className="input pl-12"
+                      maxLength={100}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {step === 4 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">What's your major?</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                What's your major?
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
                 Tell us what you're studying.
               </p>
@@ -311,7 +374,9 @@ export const Onboarding = () => {
                   >
                     <option value="">Select your major</option>
                     {MAJORS.map((m) => (
-                      <option key={m} value={m}>{m}</option>
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -326,7 +391,9 @@ export const Onboarding = () => {
                     className="input appearance-none cursor-pointer"
                   >
                     {YEARS.map((year) => (
-                      <option key={year} value={year}>{year}</option>
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -336,7 +403,9 @@ export const Onboarding = () => {
 
           {step === 5 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">Tell us about yourself</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                Tell us about yourself
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
                 A short bio helps others know you better (optional).
               </p>
@@ -361,7 +430,9 @@ export const Onboarding = () => {
 
           {step === 6 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">Add a profile photo</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                Add a profile photo
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
                 Help others recognize you (optional).
               </p>
@@ -400,16 +471,36 @@ export const Onboarding = () => {
 
           {step === 7 && (
             <div className="animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-900 text-center">How do you want to start?</h2>
+              <h2 className="text-2xl font-bold text-slate-900 text-center">
+                How do you want to start?
+              </h2>
               <p className="mt-2 text-slate-600 text-center">
                 Choose your primary mode. You can change this anytime.
               </p>
 
               <div className="mt-8 space-y-3">
                 {[
-                  { value: 'study' as Mode, icon: BookOpenCheck, title: 'Study', description: 'Find study partners and academic help', color: 'study' },
-                  { value: 'social' as Mode, icon: Users, title: 'Social', description: 'Meet new friends and hang out', color: 'social' },
-                  { value: 'project' as Mode, icon: Rocket, title: 'Project', description: 'Collaborate on projects and ideas', color: 'project' },
+                  {
+                    value: "study" as Mode,
+                    icon: BookOpenCheck,
+                    title: "Study",
+                    description: "Find study partners and academic help",
+                    color: "study",
+                  },
+                  {
+                    value: "social" as Mode,
+                    icon: Users,
+                    title: "Social",
+                    description: "Meet new friends and hang out",
+                    color: "social",
+                  },
+                  {
+                    value: "project" as Mode,
+                    icon: Rocket,
+                    title: "Project",
+                    description: "Collaborate on projects and ideas",
+                    color: "project",
+                  },
                 ].map((mode) => {
                   const Icon = mode.icon;
                   const isSelected = selectedMode === mode.value;
@@ -419,22 +510,31 @@ export const Onboarding = () => {
                       onClick={() => setSelectedMode(mode.value)}
                       className={`
                         w-full p-4 rounded-xl border-2 text-left transition-all duration-200
-                        ${isSelected
-                          ? `border-${mode.color} bg-${mode.color}-light`
-                          : 'border-slate-200 hover:border-slate-300'
+                        ${
+                          isSelected
+                            ? `border-${mode.color} bg-${mode.color}-light`
+                            : "border-slate-200 hover:border-slate-300"
                         }
                       `}
                     >
                       <div className="flex items-center gap-4">
-                        <div className={`
+                        <div
+                          className={`
                           w-12 h-12 rounded-xl flex items-center justify-center
-                          ${isSelected ? `bg-${mode.color}` : 'bg-slate-100'}
-                        `}>
-                          <Icon className={`w-6 h-6 ${isSelected ? 'text-white' : 'text-slate-500'}`} />
+                          ${isSelected ? `bg-${mode.color}` : "bg-slate-100"}
+                        `}
+                        >
+                          <Icon
+                            className={`w-6 h-6 ${isSelected ? "text-white" : "text-slate-500"}`}
+                          />
                         </div>
                         <div className="flex-1">
-                          <p className="font-semibold text-slate-900">{mode.title}</p>
-                          <p className="text-sm text-slate-600">{mode.description}</p>
+                          <p className="font-semibold text-slate-900">
+                            {mode.title}
+                          </p>
+                          <p className="text-sm text-slate-600">
+                            {mode.description}
+                          </p>
                         </div>
                         {isSelected && (
                           <Check className={`w-5 h-5 text-${mode.color}`} />
