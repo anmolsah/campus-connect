@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "predeploy": "node scripts/pre-deploy-check.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
