@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Settings, ArrowLeft, ShieldCheck, Check, Eye,
+  Settings, ArrowLeft, ShieldCheck, Check,
   BookOpen, Users, Rocket
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useUserStore } from '../../stores/userStore';
+import { useDataStore } from '../../stores/dataStore';
 import { Avatar, LoadingSpinner } from '../../components/ui';
 import type { Mode } from '../../types';
 
@@ -33,17 +34,18 @@ const modes: { value: Mode; icon: typeof BookOpen; title: string; description: s
 export const Profile = () => {
   const navigate = useNavigate();
   const { user, currentMode, setMode, updateProfile } = useUserStore();
-  const [stats, setStats] = useState({ connections: 0, posts: 0 });
-  const [isLoading, setIsLoading] = useState(true);
+  const { profileStats, setProfileStats, shouldRefetchProfileStats } = useDataStore();
+  const [stats, setStats] = useState(profileStats || { connections: 0, posts: 0 });
+  const [isLoading, setIsLoading] = useState(!profileStats);
 
-  useEffect(() => {
-    if (user) {
-      fetchStats();
-    }
-  }, [user]);
-
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async (forceRefetch = false) => {
     if (!user) return;
+
+    if (!forceRefetch && profileStats && !shouldRefetchProfileStats()) {
+      setStats(profileStats);
+      setIsLoading(false);
+      return;
+    }
 
     setIsLoading(true);
 
@@ -58,13 +60,21 @@ export const Profile = () => {
       .select('*', { count: 'exact', head: true })
       .eq('author_id', user.id);
 
-    setStats({
+    const newStats = {
       connections: connectionsCount || 0,
       posts: postsCount || 0,
-    });
+    };
 
+    setStats(newStats);
+    setProfileStats(newStats);
     setIsLoading(false);
-  };
+  }, [user, profileStats, shouldRefetchProfileStats, setProfileStats]);
+
+  useEffect(() => {
+    if (user) {
+      fetchStats();
+    }
+  }, [user]);
 
   const handleModeChange = async (mode: Mode) => {
     setMode(mode);
@@ -77,7 +87,7 @@ export const Profile = () => {
     }
   };
 
-  if (!user || isLoading) {
+  if (!user) {
     return (
       <div className="flex items-center justify-center h-screen bg-white">
         <LoadingSpinner size="lg" />
@@ -178,11 +188,23 @@ export const Profile = () => {
 
         <div className="mt-8 grid grid-cols-2 gap-4">
           <div className="bg-slate-50 rounded-2xl p-5 text-center">
-            <p className="text-3xl font-bold text-slate-900">{stats.connections}</p>
+            {isLoading ? (
+              <div className="h-9 flex items-center justify-center">
+                <LoadingSpinner size="sm" />
+              </div>
+            ) : (
+              <p className="text-3xl font-bold text-slate-900">{stats.connections}</p>
+            )}
             <p className="text-sm text-slate-500 mt-1 uppercase tracking-wide">Connections</p>
           </div>
           <div className="bg-slate-50 rounded-2xl p-5 text-center">
-            <p className="text-3xl font-bold text-slate-900">{stats.posts}</p>
+            {isLoading ? (
+              <div className="h-9 flex items-center justify-center">
+                <LoadingSpinner size="sm" />
+              </div>
+            ) : (
+              <p className="text-3xl font-bold text-slate-900">{stats.posts}</p>
+            )}
             <p className="text-sm text-slate-500 mt-1 uppercase tracking-wide">Posts</p>
           </div>
         </div>

@@ -147,6 +147,23 @@ export const Feed = () => {
           .from('post_likes')
           .insert({ post_id: postId, user_id: user.id });
       }
+
+      const { data: updatedPost } = await supabase
+        .from('posts')
+        .select('likes_count')
+        .eq('id', postId)
+        .single();
+
+      if (updatedPost) {
+        setPosts((prev) =>
+          prev.map((post) =>
+            post.id === postId
+              ? { ...post, likes_count: updatedPost.likes_count }
+              : post
+          )
+        );
+        updateFeedPost(postId, { likes_count: updatedPost.likes_count });
+      }
     } catch (error) {
       setPosts((prev) =>
         prev.map((post) =>

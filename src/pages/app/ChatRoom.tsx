@@ -7,11 +7,15 @@ import { useUserStore } from '../../stores/userStore';
 import { Avatar, LoadingSpinner } from '../../components/ui';
 import type { Message, Profile, Connection, UserPresence } from '../../types';
 
+interface OptimisticMessage extends Message {
+  isOptimistic?: boolean;
+}
+
 export const ChatRoom = () => {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
   const { user } = useUserStore();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<OptimisticMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -22,7 +26,7 @@ export const ChatRoom = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const channelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -36,32 +40,15 @@ export const ChatRoom = () => {
     if (!user || !connectionId) return;
 
     try {
-      const { data: existing } = await supabase
+      await supabase
         .from('user_presence')
-        .select('id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (existing) {
-        await supabase
-          .from('user_presence')
-          .update({
-            is_online: true,
-            current_chat_id: connectionId,
-            is_typing: isTyping,
-            last_seen: new Date().toISOString(),
-          })
-          .eq('user_id', user.id);
-      } else {
-        await supabase
-          .from('user_presence')
-          .insert({
-            user_id: user.id,
-            is_online: true,
-            current_chat_id: connectionId,
-            is_typing: isTyping,
-          });
-      }
+        .upsert({
+          user_id: user.id,
+          is_online: true,
+          current_chat_id: connectionId,
+          is_typing: isTyping,
+          last_seen: new Date().toISOString(),
+        }, { onConflict: 'user_id' });
     } catch (error) {
       console.error('Error updating presence:', error);
     }
@@ -73,12 +60,12 @@ export const ChatRoom = () => {
     try {
       await supabase
         .from('user_presence')
-        .update({
+        .upsert({
+          user_id: user.id,
           current_chat_id: null,
           is_typing: false,
           last_seen: new Date().toISOString(),
-        })
-        .eq('user_id', user.id);
+        }, { onConflict: 'user_id' });
     } catch (error) {
       console.error('Error clearing presence:', error);
     }
@@ -157,8 +144,11 @@ export const ChatRoom = () => {
   const setupRealtimeSubscriptions = useCallback(() => {
     if (!connectionId || !otherUser) return;
 
+    channelsRef.current.forEach(ch => supabase.removeChannel(ch));
+    channelsRef.current = [];
+
     const messagesChannel = supabase
-      .channel(`chat:${connectionId}`)
+      .channel(`chat-messages-${connectionId}`)
       .on(
         'postgres_changes',
         {
@@ -170,8 +160,9 @@ export const ChatRoom = () => {
         (payload) => {
           const newMsg = payload.new as Message;
           setMessages((prev) => {
-            if (prev.some(m => m.id === newMsg.id)) return prev;
-            return [...prev, newMsg];
+            const filtered = prev.filter(m => !m.isOptimistic || m.content !== newMsg.content);
+            if (filtered.some(m => m.id === newMsg.id)) return filtered;
+            return [...filtered, newMsg];
           });
 
           if (newMsg.sender_id !== user?.id) {
@@ -185,7 +176,7 @@ export const ChatRoom = () => {
       .subscribe();
 
     const presenceChannel = supabase
-      .channel(`presence:${otherUser.id}`)
+      .channel(`chat-presence-${otherUser.id}`)
       .on(
         'postgres_changes',
         {
@@ -204,12 +195,7 @@ export const ChatRoom = () => {
       )
       .subscribe();
 
-    presenceChannelRef.current = presenceChannel;
-
-    return () => {
-      supabase.removeChannel(messagesChannel);
-      supabase.removeChannel(presenceChannel);
-    };
+    channelsRef.current = [messagesChannel, presenceChannel];
   }, [connectionId, otherUser, user?.id]);
 
   useEffect(() => {
@@ -221,14 +207,13 @@ export const ChatRoom = () => {
 
     return () => {
       clearMyPresence();
-      supabase.removeAllChannels();
+      channelsRef.current.forEach(ch => supabase.removeChannel(ch));
     };
   }, [connectionId, user]);
 
   useEffect(() => {
     if (otherUser) {
-      const cleanup = setupRealtimeSubscriptions();
-      return cleanup;
+      setupRealtimeSubscriptions();
     }
   }, [otherUser, setupRealtimeSubscriptions]);
 
@@ -258,14 +243,28 @@ export const ChatRoom = () => {
   const handleSend = async () => {
     if (!newMessage.trim() || !connectionId || !user || isSending) return;
 
-    setIsSending(true);
     const content = newMessage.trim();
     setNewMessage('');
+    setIsSending(true);
     updateMyPresence(false);
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
+
+    const optimisticId = `optimistic-${Date.now()}`;
+    const optimisticMessage: OptimisticMessage = {
+      id: optimisticId,
+      connection_id: connectionId,
+      sender_id: user.id,
+      content,
+      message_type: 'text',
+      is_read: false,
+      created_at: new Date().toISOString(),
+      isOptimistic: true,
+    };
+
+    setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
       const { error } = await supabase.from('messages').insert({
@@ -276,9 +275,11 @@ export const ChatRoom = () => {
       });
 
       if (error) {
+        setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
         setNewMessage(content);
       }
     } catch (error) {
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setNewMessage(content);
     }
 
@@ -298,8 +299,8 @@ export const ChatRoom = () => {
     return format(date, 'MMMM d, yyyy');
   };
 
-  const groupMessagesByDate = (msgs: Message[]) => {
-    const groups: { date: string; messages: Message[] }[] = [];
+  const groupMessagesByDate = (msgs: OptimisticMessage[]) => {
+    const groups: { date: string; messages: OptimisticMessage[] }[] = [];
 
     msgs.forEach((msg) => {
       const dateKey = format(new Date(msg.created_at), 'yyyy-MM-dd');
@@ -439,6 +440,7 @@ export const ChatRoom = () => {
                             ? 'bg-blue-500 text-white rounded-br-md'
                             : 'bg-white text-slate-900 rounded-bl-md shadow-sm border border-slate-100'
                           }
+                          ${message.isOptimistic ? 'opacity-70' : ''}
                         `}
                       >
                         <p className="text-sm whitespace-pre-wrap break-words">

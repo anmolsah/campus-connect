@@ -13,6 +13,11 @@ interface ConnectionWithProfile extends Connection {
   unread_count?: number;
 }
 
+interface ProfileStats {
+  connections: number;
+  posts: number;
+}
+
 interface DataState {
   discoveryProfiles: Profile[];
   discoveryConnections: Connection[];
@@ -26,9 +31,13 @@ interface DataState {
   chatPendingRequests: ConnectionWithProfile[];
   chatsLastFetched: number | null;
 
+  profileStats: ProfileStats | null;
+  profileStatsLastFetched: number | null;
+
   setDiscoveryData: (profiles: Profile[], connections: Connection[]) => void;
   setFeedData: (posts: PostWithAuthor[], mode: string) => void;
   setChatData: (connections: ConnectionWithProfile[], pending: ConnectionWithProfile[]) => void;
+  setProfileStats: (stats: ProfileStats) => void;
 
   updateDiscoveryConnection: (connection: Connection) => void;
   updateFeedPost: (postId: string, updates: Partial<PostWithAuthor>) => void;
@@ -39,6 +48,7 @@ interface DataState {
   shouldRefetchDiscovery: (mode: string, campus: boolean, userCampus: string | null) => boolean;
   shouldRefetchFeed: (mode: string) => boolean;
   shouldRefetchChats: () => boolean;
+  shouldRefetchProfileStats: () => boolean;
 }
 
 const CACHE_DURATION = 30000;
@@ -56,6 +66,9 @@ export const useDataStore = create<DataState>((set, get) => ({
   chatPendingRequests: [],
   chatsLastFetched: null,
 
+  profileStats: null,
+  profileStatsLastFetched: null,
+
   setDiscoveryData: (profiles, connections) => set({
     discoveryProfiles: profiles,
     discoveryConnections: connections,
@@ -72,6 +85,11 @@ export const useDataStore = create<DataState>((set, get) => ({
     chatConnections: connections,
     chatPendingRequests: pending,
     chatsLastFetched: Date.now(),
+  }),
+
+  setProfileStats: (stats) => set({
+    profileStats: stats,
+    profileStatsLastFetched: Date.now(),
   }),
 
   updateDiscoveryConnection: (connection) => set((state) => ({
@@ -98,6 +116,8 @@ export const useDataStore = create<DataState>((set, get) => ({
     chatConnections: [],
     chatPendingRequests: [],
     chatsLastFetched: null,
+    profileStats: null,
+    profileStatsLastFetched: null,
   }),
 
   shouldRefetchDiscovery: (mode, campus, userCampus) => {
@@ -119,6 +139,13 @@ export const useDataStore = create<DataState>((set, get) => ({
     const state = get();
     if (!state.chatsLastFetched) return true;
     if (Date.now() - state.chatsLastFetched > CACHE_DURATION) return true;
+    return false;
+  },
+
+  shouldRefetchProfileStats: () => {
+    const state = get();
+    if (!state.profileStatsLastFetched) return true;
+    if (Date.now() - state.profileStatsLastFetched > CACHE_DURATION) return true;
     return false;
   },
 }));
