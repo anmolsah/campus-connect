@@ -7,4 +7,4 @@ pages_build_output_dir = "dist"
 command = "npm run build"
 
 [build.environment]
-NODE_VERSION = "20"
+NODE_VERSION = "18"
